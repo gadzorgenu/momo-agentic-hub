@@ -1,0 +1,53 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrderStatus {
+  pending
+  paid
+  partial
+  failed
+  cancelled
+}
+
+model Order {
+  id            String     @id @default(cuid())
+  orderId       String     @unique
+  amount        Float
+  currency      String     @default("GHS")
+  status        OrderStatus @default(pending)
+  customerPhone String?
+  metadata      Json?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  attempts      ReconciliationAttempt[]
+}
+
+model Receipt {
+  id            String   @id @default(cuid())
+  source        String
+  rawText       String
+  reference     String?
+  amount        Float?
+  parsedAt      DateTime?
+  metadata      Json?
+  idempotencyKey String? @unique
+  createdAt     DateTime @default(now())
+  attempts      ReconciliationAttempt[]
+}
+
+model ReconciliationAttempt {
+  id            String   @id @default(cuid())
+  order         Order?   @relation(fields: [orderId], references: [id])
+  orderId       String?
+  receipt       Receipt? @relation(fields: [receiptId], references: [id])
+  receiptId     String?
+  status        String
+  note          String?
+  createdAt     DateTime @default(now())
+}
