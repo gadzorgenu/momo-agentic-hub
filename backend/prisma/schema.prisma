@@ -47,6 +47,8 @@ model ReconciliationAttempt {
   orderId       String?
   receipt       Receipt? @relation(fields: [receiptId], references: [id])
   receiptId     String?
+  runId         String?  
+  plannerOutput Json?
   status        String
   note          String?
   createdAt     DateTime @default(now())

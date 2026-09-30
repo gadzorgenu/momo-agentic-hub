@@ -33,6 +33,25 @@ export async function verifyMomoReceipt(input: unknown) {
 
   // Persist receipt for audit and idempotency
   try {
+    // If caller supplied an idempotencyKey in metadata use it to dedupe
+    const idemp = parsed.metadata?.idempotencyKey
+    if (idemp) {
+      const existing = await prisma.receipt.findUnique({ where: { idempotencyKey: String(idemp) } })
+      if (existing) {
+        // return a parsed-like output based on existing record
+        return VerifyMomoReceiptOutput.parse({
+          matched: Boolean(existing.amount),
+          reference: existing.reference ?? undefined,
+          amount: existing.amount ?? undefined,
+          currency: existing.currency ?? undefined,
+          sender: existing.metadata?.sender ?? undefined,
+          fees: undefined,
+          confidence: existing.amount ? 0.95 : 0.2,
+          parsedAt: existing.parsedAt ? existing.parsedAt.toISOString() : new Date().toISOString(),
+          notes: 'Deduplicated by idempotencyKey',
+        })
+      }
+    }
     await prisma.receipt.create({
       data: {
         source: parsed.source,
@@ -41,6 +60,7 @@ export async function verifyMomoReceipt(input: unknown) {
         amount: output.amount ?? undefined,
         parsedAt: output.parsedAt ? new Date(output.parsedAt) : undefined,
         metadata: parsed.metadata ?? undefined,
+        idempotencyKey: parsed.metadata?.idempotencyKey ?? undefined,
       },
     })
   } catch (e) {
@@ -69,7 +89,7 @@ export async function fetchOrderDetails(input: unknown) {
   return FetchOrderDetailsOutput.parse({ found: true, order: mapped })
 }
 
-export async function updateOrderStatus(input: unknown) {
+export async function updateOrderStatus(input: unknown, runId?: string) {
   const parsed = UpdateOrderStatusInput.parse(input)
 
   const existing = await prisma.order.findUnique({ where: { orderId: parsed.orderId } })
@@ -90,6 +110,7 @@ export async function updateOrderStatus(input: unknown) {
         orderId: updated.id,
         status: parsed.status,
         note: parsed.note ?? undefined,
+        runId: runId ?? undefined,
       },
     })
   } catch (e) {

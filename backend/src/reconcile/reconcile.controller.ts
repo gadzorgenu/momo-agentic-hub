@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Body, Param, Req, Res, NotFoundException } from '@nestjs/common'
 import { AgentService } from '../agent/agent.service.js'
 import type { Request, Response } from 'express'
+import prisma from '../prisma/client.js'
 
 @Controller('api/reconcile')
 export class ReconcileController {
@@ -50,5 +51,15 @@ export class ReconcileController {
     const ok = this.agentService.approve(runId, body.action, body.actorId, body.note)
     if (!ok) throw new NotFoundException('Run not found or already completed')
     return { success: true }
+  }
+
+  @Get('attempts')
+  async attempts(@Req() req: Request) {
+    // Return recent reconciliation attempts for audit trail; allow optional ?runId= filter
+    const runId = (req.query as any)?.runId
+    const where: any = {}
+    if (runId) where.runId = String(runId)
+    const recent = await prisma.reconciliationAttempt.findMany({ where, orderBy: { createdAt: 'desc' }, take: 50 })
+    return recent
   }
 }
