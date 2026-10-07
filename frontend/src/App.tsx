@@ -1,4 +1,4 @@
-import { Plus, RefreshCw, Search, UserPlus } from 'lucide-react'
+import { ArrowLeft, Plus, RefreshCw, Search, UserPlus } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import type { RunSummary } from './api'
 import { IngestDialog, NewOrderDialog } from './components/Dialogs'
@@ -9,6 +9,7 @@ import { AuditTable, OrdersTable, ReviewTable, RunsTable, TransactionsTable } fr
 import { ToastProvider } from './components/Toast'
 import { Button, IconButton, Input, Panel } from './components/ui'
 import { NAV, type View } from './nav'
+import { useViewHistory } from './useViewHistory'
 import { runParsed, runsByTxId } from './selectors'
 import { useAgentHub } from './useAgentHub'
 import { useLedger } from './useLedger'
@@ -27,23 +28,19 @@ const matches = (q: string, ...fields: (string | number | null | undefined)[]) =
 export default function App() {
   const { runs, connected, ledgerVersion, refreshLedger } = useAgentHub()
   const { data, error } = useLedger(ledgerVersion)
-  const [view, setView] = useState<View>('overview')
+  const { view, from, navigate, back } = useViewHistory()
   const [openRunId, setOpenRunId] = useState<string | null>(null)
   const [ingestOpen, setIngestOpen] = useState(false)
   const [orderOpen, setOrderOpen] = useState(false)
-  const [query, setQuery] = useState('')
+  const [search, setSearch] = useState<{ view: View; text: string }>({ view: 'overview', text: '' })
+  const query = search.view === view ? search.text : ''
+  const setQuery = (text: string) => setSearch({ view, text })
 
   const awaiting = runs.filter((r) => r.status === 'AWAITING_REVIEW' && r.review)
   const openRun: RunSummary | null = runs.find((r) => r.runId === openRunId) ?? null
   const txRunIds = useMemo(() => runsByTxId(runs), [runs])
   const closeDrawer = useCallback(() => setOpenRunId(null), [])
   const q = query.trim().toLowerCase()
-
-  const navigate = (v: View) => {
-    setView(v)
-    setQuery('')
-    window.scrollTo({ top: 0 })
-  }
 
   const searchable = view === 'transactions' || view === 'orders' || view === 'audit' || view === 'runs'
 
@@ -110,7 +107,25 @@ export default function App() {
           <main className="mx-auto max-w-7xl min-w-0 px-4 py-6 sm:px-6 lg:px-8">
             <header className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
               <div>
-                <p className="hidden text-xs text-slate-400 lg:block">MoMo Hub / {NAV.find((n) => n.id === view)?.label}</p>
+                {from && (
+                  <button type="button" onClick={back} className="mb-2 inline-flex items-center gap-1 rounded-md py-0.5 pr-1.5 text-xs font-medium text-slate-500 transition hover:text-slate-900">
+                    <ArrowLeft className="size-3.5" />
+                    Back to {NAV.find((n) => n.id === from)?.label}
+                  </button>
+                )}
+                <nav aria-label="Breadcrumb" className={from ? 'hidden' : 'hidden text-xs text-slate-400 lg:block'}>
+                  {view === 'overview' ? (
+                    'MoMo Hub'
+                  ) : (
+                    <>
+                      <button type="button" onClick={() => navigate('overview')} className="hover:text-slate-700 hover:underline">
+                        MoMo Hub
+                      </button>
+                      {' / '}
+                      {NAV.find((n) => n.id === view)?.label}
+                    </>
+                  )}
+                </nav>
                 <h1 className="text-xl font-semibold tracking-tight text-slate-900">{PAGE[view].title}</h1>
                 <p className="mt-0.5 text-sm text-slate-500">{PAGE[view].subtitle}</p>
               </div>

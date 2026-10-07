@@ -1,9 +1,9 @@
-import { Activity, ArrowRight, CheckCircle2, Equal, Minus } from 'lucide-react'
+import { ArrowRight, CheckCircle2, Equal, Minus } from 'lucide-react'
 import type { OrderStatus, RunSummary, TransactionDto } from '../api'
-import { EVENT_UI } from '../eventUi'
-import { cx, ghs, ORDER_STATUS, time } from '../format'
-import { reconSummary, recentActivity, runsByTxId } from '../selectors'
+import { cx, ghs, ORDER_STATUS } from '../format'
+import { reconSummary, runsByTxId } from '../selectors'
 import type { LedgerData } from '../useLedger'
+import { AgentActivity } from './AgentActivity'
 import { ReviewTable, TransactionsTable } from './Tables'
 import { Panel } from './ui'
 
@@ -93,38 +93,7 @@ function OrderStats({ orders }: { orders: LedgerData['orders'] }) {
   )
 }
 
-function ActivityFeed({ runs, onOpen }: { runs: RunSummary[]; onOpen: (runId: string) => void }) {
-  const events = recentActivity(runs, 10)
-  return (
-    <Panel title="Live agent activity" icon={<Activity className="size-4 text-violet-500" />} className="h-full">
-      {events.length === 0 ? (
-        <p className="px-4 py-8 text-center text-sm text-slate-500">Agent reasoning will stream here as payments arrive.</p>
-      ) : (
-        <ul className="divide-y divide-slate-100">
-          {events.map((e) => {
-            const ui = EVENT_UI[e.type]
-            const Icon = ui.icon
-            return (
-              <li key={`${e.runId}:${e.seq}`}>
-                <button type="button" onClick={() => onOpen(e.runId)} className="flex w-full gap-3 px-4 py-2.5 text-left hover:bg-slate-50">
-                  <Icon className={cx('mt-0.5 size-4 shrink-0', ui.color)} />
-                  <span className="min-w-0 flex-1">
-                    <span className="line-clamp-2 text-[13px] text-slate-700">{e.message}</span>
-                    <span className="mt-0.5 block text-[11px] text-slate-400 tabular-nums">
-                      {time(e.at)} · {ui.label}
-                    </span>
-                  </span>
-                </button>
-              </li>
-            )
-          })}
-        </ul>
-      )}
-    </Panel>
-  )
-}
-
-export function Overview({ runs, data, onOpen, onNavigate }: { runs: RunSummary[]; data: LedgerData; onOpen: (runId: string) => void; onNavigate: (v: 'review' | 'transactions') => void }) {
+export function Overview({ runs, data, onOpen, onNavigate }: { runs: RunSummary[]; data: LedgerData; onOpen: (runId: string) => void; onNavigate: (v: 'review' | 'transactions' | 'runs') => void }) {
   const awaiting = runs.filter((r) => r.status === 'AWAITING_REVIEW' && r.review)
   const viewAll = (v: 'review' | 'transactions') => (
     <button type="button" onClick={() => onNavigate(v)} className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-900">
@@ -142,7 +111,7 @@ export function Overview({ runs, data, onOpen, onNavigate }: { runs: RunSummary[
           </Panel>
         </div>
         <div className="min-w-0 xl:col-span-4">
-          <ActivityFeed runs={runs} onOpen={onOpen} />
+          <AgentActivity runs={runs} onOpen={onOpen} onViewAll={() => onNavigate('runs')} />
         </div>
       </div>
       <Panel title="Recent transactions" icon={<span className="size-2 rounded-full bg-emerald-500" />} actions={viewAll('transactions')}>

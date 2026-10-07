@@ -41,23 +41,6 @@ export function reconSummary(transactions: TransactionDto[]): ReconSummary {
   return { received, verified, unreconciled, receivedCount: transactions.length, verifiedCount }
 }
 
-/** Latest events across all runs, newest first, for the activity feed. */
-export function recentActivity(runs: RunSummary[], limit: number): AgentEvent[] {
-  const interesting = new Set<AgentEvent['type']>(['thought', 'review_required', 'review_resolved', 'run_completed', 'run_failed'])
-  const seen = new Set<string>()
-  return runs
-    .flatMap((r) => r.events.filter((e) => interesting.has(e.type)))
-    .sort((a, b) => b.at.localeCompare(a.at))
-    .filter((e) => {
-      // The final summary often repeats the last reasoning step verbatim.
-      const key = `${e.runId}:${e.message}`
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-    .slice(0, limit)
-}
-
 /** Maps a MoMo transaction ID to the run that processed it, so table rows can open the agent trace. */
 export function runsByTxId(runs: RunSummary[]): Map<string, string> {
   const map = new Map<string, string>()
