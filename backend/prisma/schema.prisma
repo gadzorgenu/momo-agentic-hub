@@ -8,48 +8,54 @@ datasource db {
 }
 
 enum OrderStatus {
-  pending
-  paid
-  partial
-  failed
-  cancelled
+  PENDING
+  VERIFIED
+  DISCREPANCY_FLAGGED
+  REJECTED
 }
 
 model Order {
-  id            String     @id @default(cuid())
-  orderId       String     @unique
-  amount        Float
-  currency      String     @default("GHS")
-  status        OrderStatus @default(pending)
-  customerPhone String?
-  metadata      Json?
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
-  attempts      ReconciliationAttempt[]
+  id             String       @id @default(uuid())
+  customerName   String
+  customerPhone  String
+  expectedAmount Float
+  status         OrderStatus  @default(PENDING)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  transaction    Transaction?
+  auditLogs      AuditLog[]
 }
 
-model Receipt {
-  id            String   @id @default(cuid())
-  source        String
-  rawText       String
-  reference     String?
-  amount        Float?
-  parsedAt      DateTime?
-  metadata      Json?
-  idempotencyKey String? @unique
-  createdAt     DateTime @default(now())
-  attempts      ReconciliationAttempt[]
+model Transaction {
+  id           String     @id @default(uuid())
+  // Unique so a replayed/duplicate SMS can never be credited twice.
+  momoTxId     String     @unique
+  senderName   String
+  senderPhone  String
+  amountPaid   Float
+  rawSms       String
+  // Extracted from the SMS; not part of the original spec model but required by the parsing requirement.
+  provider     String?
+  transactedAt DateTime?
+  orderId      String?    @unique
+  order        Order?     @relation(fields: [orderId], references: [id])
+  createdAt    DateTime   @default(now())
+  auditLogs    AuditLog[]
 }
 
-model ReconciliationAttempt {
-  id            String   @id @default(cuid())
-  order         Order?   @relation(fields: [orderId], references: [id])
+// Append-only audit trail of agent state transitions and human decisions.
+model AuditLog {
+  id            String       @id @default(uuid())
+  runId         String
+  event         String
+  message       String
+  data          Json?
   orderId       String?
-  receipt       Receipt? @relation(fields: [receiptId], references: [id])
-  receiptId     String?
-  runId         String?  
-  plannerOutput Json?
-  status        String
-  note          String?
-  createdAt     DateTime @default(now())
+  order         Order?       @relation(fields: [orderId], references: [id])
+  transactionId String?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
+  createdAt     DateTime     @default(now())
+
+  @@index([runId])
+  @@index([createdAt])
 }

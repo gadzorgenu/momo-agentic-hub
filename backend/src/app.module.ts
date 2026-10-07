@@ -5,6 +5,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller.js';
 import { AgentModule } from './agent/agent.module.js';
 import { ReconcileController } from './reconcile/reconcile.controller.js';
+import { LedgerController } from './ledger/ledger.controller.js';
 import { AppService } from './app.service.js';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
@@ -29,13 +30,13 @@ if (process.env.OBSERVE_APP_KEY && process.env.OBSERVE_APP_SECRET) {
   imports: [
     // include ObserveModule conditionally
     ...observeImports,
-    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 20 }]),
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 60 }]),
     AgentModule,
   ],
-  controllers: [AppController, ReconcileController],
+  controllers: [AppController, ReconcileController, LedgerController],
   providers: [
     AppService,
-    // Apply rate limiting globally (20 requests per 60 s per IP)
+    // Rate-limit writes globally (60 requests per 60 s per IP); read/SSE routes opt out with @SkipThrottle
     { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })

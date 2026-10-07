@@ -1,131 +1,131 @@
+import { tool } from '@langchain/core/tools'
+import { Prisma, type PrismaClient } from '@prisma/client'
 import { z } from 'zod'
-import {
-  FetchOrderDetailsInput,
-  FetchOrderDetailsOutput,
-  VerifyMomoReceiptInput,
-  VerifyMomoReceiptOutput,
-  UpdateOrderStatusInput,
-  UpdateOrderStatusOutput,
-  OrderSchema,
-} from '../tools/schemas.js'
-import prisma from '../prisma/client.js'
+import { ParsedSmsSchema } from './schemas.js'
 
-export async function verifyMomoReceipt(input: unknown) {
-  const parsed = VerifyMomoReceiptInput.parse(input)
+/** Thrown when a conditional order update finds the order no longer in the expected state. */
+export class OrderStateConflictError extends Error {}
 
-  // naive parsing: look for numbers that look like amounts and refs
-  const amountMatch = parsed.rawText.match(/(?:GHS|GHc|ghs)?\s?(\d+(?:\.\d{1,2})?)/i)
-  const refMatch = parsed.rawText.match(/(ORD[-_]?\d{3,6}|MM|REF|REF:|TRX)[:#\s-]*([A-Z0-9-]+)/i)
+const isUniqueViolation = (err: unknown) => err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'
 
-  const reference = refMatch ? refMatch[1].toUpperCase() : undefined
-
-  const output = VerifyMomoReceiptOutput.parse({
-    matched: Boolean(amountMatch),
-    reference: reference,
-    amount: amountMatch ? Number(amountMatch[1]) : undefined,
-    currency: amountMatch ? 'GHS' : undefined,
-    sender: parsed.metadata?.sender || undefined,
-    fees: undefined,
-    confidence: amountMatch ? 0.9 : 0.2,
-    parsedAt: new Date().toISOString(),
-    notes: amountMatch ? 'Parsed by simple parser' : 'No amount found',
-  })
-
-  // Persist receipt for audit and idempotency
-  try {
-    // If caller supplied an idempotencyKey in metadata use it to dedupe
-    const idemp = parsed.metadata?.idempotencyKey
-    if (idemp) {
-      const existing = await prisma.receipt.findUnique({ where: { idempotencyKey: String(idemp) } })
-      if (existing) {
-        // return a parsed-like output based on existing record
-        return VerifyMomoReceiptOutput.parse({
-          matched: Boolean(existing.amount),
-          reference: existing.reference ?? undefined,
-          amount: existing.amount ?? undefined,
-          currency: 'GHS',
-          sender: (existing.metadata as any)?.sender ?? undefined,
-          fees: undefined,
-          confidence: existing.amount ? 0.95 : 0.2,
-          parsedAt: existing.parsedAt ? existing.parsedAt.toISOString() : new Date().toISOString(),
-          notes: 'Deduplicated by idempotencyKey',
-        })
-      }
-    }
-    await prisma.receipt.create({
-      data: {
-        source: parsed.source,
-        rawText: parsed.rawText,
-        reference: output.reference,
-        amount: output.amount ?? undefined,
-        parsedAt: output.parsedAt ? new Date(output.parsedAt) : undefined,
-        metadata: parsed.metadata ?? undefined,
-        idempotencyKey: parsed.metadata?.idempotencyKey ?? undefined,
-      },
-    })
-  } catch (e) {
-    // ignore persistence errors for now; caller will handle
-  }
-
-  return output
-}
-
-export async function fetchOrderDetails(input: unknown) {
-  const parsed = FetchOrderDetailsInput.parse(input)
-  const order = await prisma.order.findUnique({ where: { orderId: parsed.orderId } })
-  if (!order) return FetchOrderDetailsOutput.parse({ found: false })
-
-  // map to OrderSchema shape
-  const mapped = {
-    orderId: order.orderId,
-    amount: order.amount,
-    currency: order.currency,
-    status: order.status,
-    customerPhone: order.customerPhone ?? undefined,
-    items: undefined,
-    metadata: order.metadata ?? undefined,
-  }
-
-  return FetchOrderDetailsOutput.parse({ found: true, order: mapped })
-}
-
-export async function updateOrderStatus(input: unknown, runId?: string) {
-  const parsed = UpdateOrderStatusInput.parse(input)
-
-  const existing = await prisma.order.findUnique({ where: { orderId: parsed.orderId } })
-  if (!existing) return UpdateOrderStatusOutput.parse({ success: false })
-
-  const updated = await prisma.order.update({
-    where: { orderId: parsed.orderId },
-    data: {
-      status: parsed.status as any,
-      amount: parsed.amountReceived ?? existing.amount,
+/**
+ * Zod-typed tools the reconciliation graph uses for every database side effect.
+ * Inputs are validated by the tool wrapper, so a malformed call never reaches Prisma.
+ * Order updates are conditional on the current status to stay safe under concurrent runs.
+ */
+export function createTools(db: PrismaClient) {
+  const findTransaction = tool(
+    async ({ momoTxId }) => {
+      const tx = await db.transaction.findUnique({ where: { momoTxId }, select: { id: true, orderId: true, createdAt: true } })
+      return tx ? { exists: true as const, transactionId: tx.id, orderId: tx.orderId, processedAt: tx.createdAt.toISOString() } : { exists: false as const }
     },
-  })
+    {
+      name: 'find_transaction',
+      description: 'Check whether a MoMo transaction ID has already been processed.',
+      schema: z.object({ momoTxId: z.string().min(1) }),
+    },
+  )
 
-  // log reconciliation attempt
-  try {
-    await prisma.reconciliationAttempt.create({
-      data: {
-        orderId: updated.id,
-        status: parsed.status,
-        note: parsed.note ?? undefined,
-        runId: runId ?? undefined,
-      },
-    })
-  } catch (e) {
-    // ignore
+  const listPendingOrders = tool(
+    async () =>
+      db.order.findMany({
+        where: { status: 'PENDING' },
+        select: { id: true, customerName: true, customerPhone: true, expectedAmount: true, createdAt: true },
+        orderBy: { createdAt: 'asc' },
+        take: 500,
+      }),
+    {
+      name: 'list_pending_orders',
+      description: 'List orders awaiting payment, oldest first.',
+      schema: z.object({}),
+    },
+  )
+
+  const settleExactMatch = tool(
+    async ({ parsed, rawSms, orderId }) => {
+      try {
+        return await db.$transaction(async (trx) => {
+          const { count } = await trx.order.updateMany({ where: { id: orderId, status: 'PENDING' }, data: { status: 'VERIFIED' } })
+          if (count === 0) throw new OrderStateConflictError(`Order ${orderId} is no longer PENDING`)
+          const tx = await trx.transaction.create({ data: toTransactionData(parsed, rawSms, orderId) })
+          return { duplicate: false as const, transactionId: tx.id, orderStatus: 'VERIFIED' as const }
+        })
+      } catch (err) {
+        if (isUniqueViolation(err)) return { duplicate: true as const }
+        throw err
+      }
+    },
+    {
+      name: 'settle_exact_match',
+      description: 'Record the transaction against the order and mark the order VERIFIED.',
+      schema: z.object({ parsed: ParsedSmsSchema, rawSms: z.string(), orderId: z.uuid() }),
+    },
+  )
+
+  const flagDiscrepancy = tool(
+    async ({ parsed, rawSms, orderId }) => {
+      try {
+        return await db.$transaction(async (trx) => {
+          if (orderId) {
+            const { count } = await trx.order.updateMany({ where: { id: orderId, status: 'PENDING' }, data: { status: 'DISCREPANCY_FLAGGED' } })
+            if (count === 0) throw new OrderStateConflictError(`Order ${orderId} is no longer PENDING`)
+          }
+          // Recording the transaction now claims its momoTxId, so replays are rejected while a human reviews.
+          const tx = await trx.transaction.create({ data: toTransactionData(parsed, rawSms, orderId) })
+          return { duplicate: false as const, transactionId: tx.id, orderStatus: orderId ? ('DISCREPANCY_FLAGGED' as const) : null }
+        })
+      } catch (err) {
+        if (isUniqueViolation(err)) return { duplicate: true as const }
+        throw err
+      }
+    },
+    {
+      name: 'flag_discrepancy',
+      description: 'Record the transaction and flag its order (if any) for human review.',
+      schema: z.object({ parsed: ParsedSmsSchema, rawSms: z.string(), orderId: z.uuid().nullable() }),
+    },
+  )
+
+  const applyReviewDecision = tool(
+    async ({ transactionId, orderId, decision }) =>
+      db.$transaction(async (trx) => {
+        if (!orderId) {
+          // Unmatched payment: the transaction stays on record (so it cannot be replayed) with no order.
+          return { orderStatus: null }
+        }
+        const status = decision === 'ACCEPT' ? 'VERIFIED' : decision === 'REJECT' ? 'REJECTED' : 'DISCREPANCY_FLAGGED'
+        const { count } = await trx.order.updateMany({ where: { id: orderId, status: 'DISCREPANCY_FLAGGED' }, data: { status } })
+        if (count === 0) throw new OrderStateConflictError(`Order ${orderId} is no longer DISCREPANCY_FLAGGED`)
+        if (decision === 'REJECT') {
+          await trx.transaction.update({ where: { id: transactionId }, data: { orderId: null } })
+        }
+        return { orderStatus: status }
+      }),
+    {
+      name: 'apply_review_decision',
+      description: 'Apply the operator decision: ACCEPT verifies the order, REQUEST_BALANCE keeps it flagged, REJECT rejects it and unlinks the payment.',
+      schema: z.object({
+        transactionId: z.uuid(),
+        orderId: z.uuid().nullable(),
+        decision: z.enum(['ACCEPT', 'REQUEST_BALANCE', 'REJECT']),
+      }),
+    },
+  )
+
+  return { findTransaction, listPendingOrders, settleExactMatch, flagDiscrepancy, applyReviewDecision }
+}
+
+export type ReconciliationTools = ReturnType<typeof createTools>
+
+function toTransactionData(parsed: z.infer<typeof ParsedSmsSchema>, rawSms: string, orderId: string | null) {
+  return {
+    momoTxId: parsed.momoTxId,
+    senderName: parsed.senderName,
+    senderPhone: parsed.senderPhone,
+    amountPaid: parsed.amount,
+    rawSms,
+    provider: parsed.provider,
+    transactedAt: parsed.transactedAt ? new Date(parsed.transactedAt) : null,
+    orderId,
   }
-
-  const mapped = {
-    orderId: updated.orderId,
-    amount: updated.amount,
-    currency: updated.currency,
-    status: updated.status,
-    customerPhone: updated.customerPhone ?? undefined,
-    items: undefined,
-    metadata: updated.metadata ?? undefined,
-  }
-
-  return UpdateOrderStatusOutput.parse({ success: true, updatedAt: new Date().toISOString(), order: mapped })
 }

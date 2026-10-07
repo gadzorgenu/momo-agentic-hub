@@ -1,22 +1,20 @@
 Prisma setup (backend)
 
-1. Install dependencies (from backend/):
+1. Start Postgres from the repo root (credentials match `.env.example`):
+
+```bash
+docker compose up -d --wait postgres
+```
+
+2. Install dependencies, then push the schema and seed sample pending orders (from backend/):
 
 ```bash
 npm install
-npx prisma generate
+npx prisma db push
+npm run seed
 ```
-
-2. Set `DATABASE_URL` in your environment (Postgres connection string).
-
-3. Create a migration and apply it:
-
-```bash
-npx prisma migrate dev --name init
-```
-
-4. Seed or create test orders via `npx prisma studio` or via SQL.
 
 Notes:
-- The Prisma schema is at `backend/prisma/schema.prisma`.
-- After migrations `@prisma/client` will be available to the app.
+- The Prisma schema is at `backend/prisma/schema.prisma` (`Order`, `Transaction`, `AuditLog`).
+- `npx prisma db push --force-reset && npm run seed` gives you a clean demo dataset.
+- The seeded orders line up with the sample SMS buttons in the dashboard.

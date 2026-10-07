@@ -1,0 +1,20 @@
+# Local Postgres for development. Credentials match backend/.env and the CI workflow.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: dbuser
+      POSTGRES_PASSWORD: dbpassword
+      POSTGRES_DB: momo_agent
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U dbuser -d momo_agent']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

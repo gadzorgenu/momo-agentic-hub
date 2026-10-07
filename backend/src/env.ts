@@ -1,7 +1,13 @@
 /**
- * Validates required environment variables at startup.
- * Call this from main.ts before bootstrapping the NestJS app.
+ * Loads backend/.env and validates required environment variables.
+ * Import this first in main.ts so values are set before other modules read them.
  */
+try {
+  process.loadEnvFile()
+} catch {
+  // No .env file: rely on the real environment (CI, containers).
+}
+
 const REQUIRED: string[] = ['DATABASE_URL']
 
 const RECOMMENDED: string[] = ['OPENAI_API_KEY']

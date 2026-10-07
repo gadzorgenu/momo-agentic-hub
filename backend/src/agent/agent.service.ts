@@ -1,120 +1,174 @@
-import { Injectable, Logger } from '@nestjs/common'
-import { Subject } from 'rxjs'
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common'
+import { Command } from '@langchain/langgraph'
+import type { PrismaClient } from '@prisma/client'
 import { randomUUID } from 'crypto'
-import { verifyMomoReceipt, fetchOrderDetails, updateOrderStatus } from './tools.js'
-import { planRun } from './orchestrator.js'
+import { Observable, ReplaySubject, Subject } from 'rxjs'
+import type { AgentEvent, AgentEventType, MatchOutcome, ReviewDecision, ReviewRequest, RunStatus, RunSummary } from '../contracts.js'
 import prisma from '../prisma/client.js'
+import { createExtractor, type SmsExtractor } from './extractor.js'
+import { buildReconciliationGraph, type GraphEmitter, type ReconciliationGraph, type ResumeValue } from './graph.js'
+import { createTools, type ReconciliationTools } from './tools.js'
 
-export type AgentEventKind = 'thought' | 'tool_call' | 'tool_result' | 'approval_required' | 'final_status' | 'error'
+export const AGENT_DEPS = Symbol('AGENT_DEPS')
 
-export interface AgentEvent {
-  id: string
-  kind: AgentEventKind
-  payload: Record<string, any>
-  timestamp: string
+export interface AgentDeps {
+  db: PrismaClient
+  extractor: SmsExtractor
+  tools: ReconciliationTools
 }
+
+interface RunRecord {
+  runId: string
+  status: RunStatus
+  createdAt: string
+  outcome: MatchOutcome | null
+  review: ReviewRequest | null
+  events: AgentEvent[]
+  stream: ReplaySubject<AgentEvent>
+}
+
+export class RunNotFoundError extends Error {}
+export class InvalidDecisionError extends Error {}
+
+const MAX_RUNS_IN_MEMORY = 200
 
 @Injectable()
 export class AgentService {
   private readonly logger = new Logger(AgentService.name)
-  private runs = new Map<string, Subject<AgentEvent>>()
+  private readonly runs = new Map<string, RunRecord>()
+  private readonly allEvents = new Subject<AgentEvent>()
+  private readonly db: PrismaClient
+  private readonly graph: ReconciliationGraph
 
-  startRun(rawText: string, source = 'manual') {
+  constructor(@Optional() @Inject(AGENT_DEPS) deps?: Partial<AgentDeps>) {
+    this.db = deps?.db ?? prisma
+    const emitter: GraphEmitter = {
+      emit: (runId, type, message, extra) => this.emit(runId, type, message, extra),
+      audit: (runId, event, message, extra) => this.audit(runId, event, message, extra),
+    }
+    this.graph = buildReconciliationGraph({
+      tools: deps?.tools ?? createTools(this.db),
+      extractor: deps?.extractor ?? createExtractor(),
+      events: emitter,
+    })
+  }
+
+  startRun(rawSms: string): string {
     const runId = randomUUID()
-    const subject = new Subject<AgentEvent>()
-    this.runs.set(runId, subject)
-    this.logger.log(`[${runId}] Run started`)
-    // Run real, deterministic orchestration using Zod-validated tool adapters
-    ;(async () => {
-      try {
-        subject.next({ id: runId, kind: 'thought', payload: { text: 'Parsing receipt' }, timestamp: new Date().toISOString() })
-
-        // Ask orchestrator for a plan (LLM-driven or heuristic fallback)
-        const plan = await planRun(rawText, source)
-        this.logger.log(`[${runId}] Plan: ${plan.map((s) => s.tool).join(' → ')}`)
-
-        // Persist a planning audit entry so we have an immutable record
-        try {
-          await prisma.reconciliationAttempt.create({
-            data: {
-              status: 'planned',
-              note: JSON.stringify({ rawText: rawText.slice(0, 200) }),
-              runId,
-              plannerOutput: plan as any,
-            },
-          })
-        } catch (e) {
-          // ignore DB audit failures but continue
-        }
-        let context: Record<string, any> = {}
-
-        for (const step of plan) {
-          subject.next({ id: runId, kind: 'tool_call', payload: { tool: step.tool, input: step.input }, timestamp: new Date().toISOString() })
-          this.logger.debug(`[${runId}] tool_call: ${step.tool}`)
-
-          if (step.tool === 'verifyMomoReceipt') {
-            const verified = await verifyMomoReceipt({ ...step.input, metadata: {} })
-            subject.next({ id: runId, kind: 'tool_result', payload: { tool: 'verifyMomoReceipt', output: verified }, timestamp: new Date().toISOString() })
-            context.verified = verified
-          } else if (step.tool === 'fetchOrderDetails') {
-            const fetched = await fetchOrderDetails(step.input)
-            subject.next({ id: runId, kind: 'tool_result', payload: { tool: 'fetchOrderDetails', output: fetched }, timestamp: new Date().toISOString() })
-            context.fetched = fetched
-          }
-        }
-
-        // Decide post-plan action: update or request approval
-        const verified = context.verified
-        const fetched = context.fetched
-        const orderMatch = fetched?.found ? fetched.order : null
-
-        if (orderMatch && verified?.amount && Math.abs(orderMatch.amount - verified.amount) < 1) {
-          this.logger.log(`[${runId}] Auto-reconciling order ${orderMatch.orderId}`)
-          subject.next({ id: runId, kind: 'thought', payload: { text: `Amounts match, updating order ${orderMatch.orderId}` }, timestamp: new Date().toISOString() })
-          subject.next({ id: runId, kind: 'tool_call', payload: { tool: 'updateOrderStatus', input: { orderId: orderMatch.orderId, status: 'paid', amountReceived: verified.amount, paymentReference: verified.reference } }, timestamp: new Date().toISOString() })
-          const updated = await updateOrderStatus({ orderId: orderMatch.orderId, status: 'paid', amountReceived: verified.amount, paymentReference: verified.reference }, runId)
-          subject.next({ id: runId, kind: 'tool_result', payload: { tool: 'updateOrderStatus', output: updated }, timestamp: new Date().toISOString() })
-          subject.next({ id: runId, kind: 'final_status', payload: { status: 'paid', orderId: orderMatch.orderId, summary: 'Auto-reconciled' }, timestamp: new Date().toISOString() })
-        } else {
-          // log approval_required as an audit attempt
-          try {
-            await prisma.reconciliationAttempt.create({
-              data: { status: 'approval_required', runId, note: 'No matching order or amount mismatch' },
-            })
-          } catch (_) {}
-          this.logger.warn(`[${runId}] approval_required – no match or amount mismatch`)
-          subject.next({ id: runId, kind: 'approval_required', payload: { reason: 'No matching order or amount mismatch', details: { verified, orderMatch } }, timestamp: new Date().toISOString() })
-        }
-
-        subject.complete()
-      } catch (err: any) {
-        this.logger.error(`[${runId}] Run failed: ${err?.message ?? err}`)
-        subject.next({ id: runId, kind: 'error', payload: { message: String(err?.message || err), detail: err }, timestamp: new Date().toISOString() })
-        subject.error(err)
-      } finally {
-        this.runs.delete(runId)
-      }
-    })()
-
+    this.runs.set(runId, {
+      runId,
+      status: 'RUNNING',
+      createdAt: new Date().toISOString(),
+      outcome: null,
+      review: null,
+      events: [],
+      stream: new ReplaySubject<AgentEvent>(),
+    })
+    this.pruneRuns()
+    this.emit(runId, 'run_started', 'Reconciliation run started', { data: { rawSms } })
+    void this.execute(runId, { rawSms })
     return runId
   }
 
-  getRunStream(runId: string) {
-    return this.runs.get(runId) ?? null
+  /** Resumes a paused graph with the operator's decision. */
+  decide(runId: string, decision: ReviewDecision, note?: string) {
+    const run = this.runs.get(runId)
+    if (!run) throw new RunNotFoundError(`Run ${runId} not found`)
+    if (run.status !== 'AWAITING_REVIEW' || !run.review) throw new InvalidDecisionError(`Run ${runId} is not awaiting review`)
+    if (!run.review.allowedDecisions.includes(decision)) {
+      throw new InvalidDecisionError(`${decision} is not allowed for ${run.review.outcome}; allowed: ${run.review.allowedDecisions.join(', ')}`)
+    }
+    // Flip status synchronously so a double-click cannot resume the graph twice.
+    run.status = 'RUNNING'
+    run.review = null
+    this.emit(runId, 'review_resolved', `Operator chose ${decision}`, { data: { decision, note } })
+    void this.audit(runId, 'HUMAN_DECISION', `Operator chose ${decision}${note ? `: ${note}` : ''}`, { data: { decision, note } })
+    const resume: ResumeValue = { decision, note }
+    void this.execute(runId, new Command<ResumeValue>({ resume }) as Parameters<ReconciliationGraph['invoke']>[0])
   }
 
-  // Minimal approval hook for human-in-the-loop
-  approve(runId: string, action: 'approve' | 'reject' | 'escalate', actorId?: string, note?: string) {
-    const s = this.runs.get(runId)
-    if (!s) return false
-    // Audit the human decision
-    prisma.reconciliationAttempt.create({
-      data: { status: `human_${action}`, runId, note: note ? `${actorId ?? 'anon'}: ${note}` : actorId ?? 'anon' },
-    }).catch(() => {})
-    s.next({ id: runId, kind: 'thought', payload: { text: `Human action: ${action}`, actorId, note }, timestamp: new Date().toISOString() })
-    s.next({ id: runId, kind: 'final_status', payload: { status: action === 'approve' ? 'paid' : 'pending', summary: `Human ${action}` }, timestamp: new Date().toISOString() })
-    s.complete()
-    this.runs.delete(runId)
-    return true
+  /** Replays the run's events so far, then streams live ones until it finishes. */
+  streamRun(runId: string): Observable<AgentEvent> | null {
+    return this.runs.get(runId)?.stream.asObservable() ?? null
+  }
+
+  /** Live events from every run (no replay); pair with listRuns() for history. */
+  streamAll(): Observable<AgentEvent> {
+    return this.allEvents.asObservable()
+  }
+
+  listRuns(): RunSummary[] {
+    return [...this.runs.values()].reverse().map(({ stream: _stream, ...summary }) => summary)
+  }
+
+  private async execute(runId: string, input: Parameters<ReconciliationGraph['invoke']>[0]) {
+    const config = { configurable: { thread_id: runId } }
+    const run = this.runs.get(runId)!
+    try {
+      await this.graph.invoke(input, config)
+      const snapshot = await this.graph.getState(config)
+      const pending = snapshot.tasks.flatMap((t) => t.interrupts)
+      if (pending.length) {
+        const review = pending[0].value as ReviewRequest
+        run.status = 'AWAITING_REVIEW'
+        run.outcome = review.outcome
+        run.review = review
+        this.emit(runId, 'review_required', review.reason, { node: 'human_review', data: review })
+        this.logger.log(`[${runId}] paused for review: ${review.outcome}`)
+        return
+      }
+      const values = snapshot.values as { outcome: MatchOutcome | null; summary: string | null; error: string | null }
+      run.outcome = values.outcome
+      if (values.error) {
+        run.status = 'FAILED'
+        this.emit(runId, 'run_failed', values.error)
+      } else {
+        run.status = 'COMPLETED'
+        this.emit(runId, 'run_completed', values.summary ?? 'Run completed', { data: { outcome: values.outcome } })
+      }
+      run.stream.complete()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      this.logger.error(`[${runId}] run failed: ${message}`)
+      run.status = 'FAILED'
+      this.emit(runId, 'run_failed', `Run failed: ${message}`)
+      void this.audit(runId, 'RUN_FAILED', message)
+      run.stream.complete()
+    }
+  }
+
+  private emit(runId: string, type: AgentEventType, message: string, extra?: { node?: string; data?: unknown }) {
+    const run = this.runs.get(runId)
+    if (!run) return
+    const event: AgentEvent = { runId, seq: run.events.length, at: new Date().toISOString(), type, message, ...extra }
+    run.events.push(event)
+    run.stream.next(event)
+    this.allEvents.next(event)
+  }
+
+  private async audit(runId: string, event: string, message: string, extra?: { data?: unknown; orderId?: string | null; transactionId?: string | null }) {
+    try {
+      await this.db.auditLog.create({
+        data: {
+          runId,
+          event,
+          message,
+          data: extra?.data === undefined ? undefined : (JSON.parse(JSON.stringify(extra.data)) as object),
+          orderId: extra?.orderId ?? null,
+          transactionId: extra?.transactionId ?? null,
+        },
+      })
+    } catch (err) {
+      // The audit log must never break reconciliation, but a gap in it should be visible.
+      this.logger.error(`[${runId}] failed to write audit log ${event}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  private pruneRuns() {
+    for (const [id, run] of this.runs) {
+      if (this.runs.size <= MAX_RUNS_IN_MEMORY) break
+      if (run.status === 'AWAITING_REVIEW' || run.status === 'RUNNING') continue
+      this.runs.delete(id)
+    }
   }
 }

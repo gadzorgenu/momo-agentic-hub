@@ -11,33 +11,36 @@ The MoMo Agentic Reconciliation Hub automates reconciliation of Mobile Money (MT
 - Lack of Real-Time Visibility: Merchants lack a unified dashboard to see live parsing, reasoning steps, and immediate automated status updates.
 
 ## How It Solves It
-- Autonomous Tool Execution: An LLM-driven agent receives raw, unstructured Mobile Money SMS messages or customer receipts and autonomously selects and executes tools defined with Zod schemas (e.g., `fetchOrderDetails`, `verifyMomoReceipt`, `updateOrderStatus`).
-- Real-Time Reasoning Stream: The NestJS backend streams the agent's live reasoning steps, tool calls, and outputs to the frontend using Server-Sent Events (SSE) and RxJS so operators can watch decisions as they happen.
-- Human-in-the-Loop Safeguards: When anomalies or underpayments are detected, the agent pauses and alerts the merchant via the React dashboard; a human operator can approve or reject the discrepancy before the system updates the database.
+- **SMS extraction**: gpt-4o-mini (Zod structured output) pulls the transaction ID, sender, phone, amount and timestamp out of MTN MoMo, Telecel Cash and AT Money SMS. Every extracted value is checked against the raw text, and a deterministic parser takes over when the LLM is unavailable or wrong.
+- **LangGraph reconciliation**: a `StateGraph` dedupes on `momoTxId`, matches the payment to a pending order, and classifies it as exact match, underpayment, overpayment, unmatched or duplicate. Exact matches are verified automatically.
+- **Human-in-the-loop**: anomalies pause the graph with `interrupt()`. The dashboard shows the case with **Accept**, **Request Balance** or **Reject Transaction** buttons, and the operator's choice resumes the graph.
+- **Live execution stream**: every node, reasoning step, tool call and result is streamed to the dashboard over Server-Sent Events, with an audit log in Postgres.
 
-## Key Features
-- LLM Agentic controller with autonomous tool selection
-- Zod-validated tool schemas for safe tool execution
-- SSE + RxJS streaming of agent thoughts and tool outputs
-- Human approval workflows for anomalies and edge cases
-- Unified React dashboard for live monitoring and action
+## Tech Stack
+- Backend: NestJS, LangGraph (`@langchain/langgraph`), `@langchain/openai`, Zod, Prisma + PostgreSQL, RxJS (SSE)
+- Frontend: React, Vite, Tailwind CSS, Lucide React, native `EventSource`
+- Contract: `backend/src/contracts.ts` is imported by both backend and frontend for end-to-end types
 
-## Tech Stack Architecture
-- Backend: NestJS, @langchain/langgraph, @langchain/openai, Zod
-- Frontend: React, Vite, Tailwind CSS, @microsoft/fetch-event-source, Lucide React
-- Communication: REST endpoints and SSE for real-time thought-streaming
+See [`backend/docs/api-and-schemas.md`](backend/docs/api-and-schemas.md) for the API, event format, graph and decision rules.
 
 ## Development
-1. Backend: see `backend/README.md` for backend-specific setup and env vars.
-2. Frontend: see `frontend/README.md` for frontend dev commands.
-
-Start the two parts (example):
 
 ```bash
 # from repo root
-cd backend && pnpm install && pnpm run start:dev
-cd ../frontend && pnpm install && pnpm run dev
+docker compose up -d --wait postgres
+
+cd backend
+cp .env.example .env          # add OPENAI_API_KEY (optional)
+npm install
+npx prisma db push && npm run seed
+npm run start:dev             # http://localhost:3000
+
+cd ../frontend
+npm install
+npm run dev                   # http://localhost:5173 (proxies /api to the backend)
 ```
+
+Tests: `cd backend && npm test`.
 
 ## Contributing
 Contributions, bug reports, and feature requests are welcome. Please open issues and PRs against this repository.
