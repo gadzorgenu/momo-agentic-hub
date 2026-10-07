@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { createObserveModule } from '@nestjs/observe';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller.js';
 import { AgentModule } from './agent/agent.module.js';
 import { ReconcileController } from './reconcile/reconcile.controller.js';
@@ -27,9 +29,14 @@ if (process.env.OBSERVE_APP_KEY && process.env.OBSERVE_APP_SECRET) {
   imports: [
     // include ObserveModule conditionally
     ...observeImports,
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 20 }]),
     AgentModule,
   ],
   controllers: [AppController, ReconcileController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    // Apply rate limiting globally (20 requests per 60 s per IP)
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+  ],
 })
 export class AppModule {}
