@@ -15,6 +15,25 @@ export function StatusDot({ className, label }: { className: string; label: stri
   )
 }
 
+const AUDIT_LABEL: Record<string, string> = {
+  SMS_PARSED: 'Message read',
+  PARSE_FAILED: "Couldn't read message",
+  DUPLICATE_REJECTED: 'Repeat message ignored',
+  ORDER_VERIFIED: 'Order paid',
+  UNDERPAYMENT_FLAGGED: 'Paid too little',
+  OVERPAYMENT_FLAGGED: 'Paid too much',
+  UNMATCHED_FLAGGED: 'No matching order',
+  HUMAN_DECISION: 'Decision made',
+  DECISION_ACCEPT: 'Amount accepted',
+  DECISION_REQUEST_BALANCE: 'Balance requested',
+  DECISION_REJECT: 'Payment declined',
+  RUN_FAILED: 'Something went wrong',
+}
+
+const auditLabel = (code: string) => AUDIT_LABEL[code] ?? code.toLowerCase().replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())
+
+const PROVIDER_SHORT: Record<string, string> = { MTN: 'MTN', TELECEL: 'Telecel', AT: 'AT' }
+
 const PROVIDER_PILL: Record<string, string> = {
   MTN: 'bg-amber-100 text-amber-900',
   TELECEL: 'bg-rose-100 text-rose-800',
@@ -23,7 +42,7 @@ const PROVIDER_PILL: Record<string, string> = {
 
 export function ProviderPill({ provider }: { provider: string | null }) {
   return (
-    <span className={cx('rounded px-1.5 py-0.5 text-[11px] font-semibold', PROVIDER_PILL[provider ?? ''] ?? 'bg-slate-100 text-slate-600')}>{provider ?? '—'}</span>
+    <span className={cx('rounded px-1.5 py-0.5 text-[11px] font-semibold', PROVIDER_PILL[provider ?? ''] ?? 'bg-slate-100 text-slate-600')}>{(provider && PROVIDER_SHORT[provider]) ?? '—'}</span>
   )
 }
 
@@ -81,11 +100,11 @@ function rowProps(onOpen?: () => void) {
 export function ReviewTable({ runs, onOpen }: { runs: RunSummary[]; onOpen: (runId: string) => void }) {
   return (
     <DataTable
-      head={['Anomaly', 'Sender', 'MoMo Tx ID', 'Paid', 'Expected', 'Difference', 'Flagged', '']}
+      head={['Problem', 'Paid by', 'Transaction ID', 'Paid', 'Owed', 'Difference', 'Time', '']}
       empty={runs.length === 0}
       emptyIcon={Inbox}
-      emptyTitle="No payments waiting for review"
-      emptyText="Underpayments, overpayments and unmatched payments pause here for your decision."
+      emptyTitle="Nothing needs your decision"
+      emptyText="When a customer pays too little, too much, or we can't find their order, it will show up here."
     >
       {runs.map((r) => {
         const review = r.review!
@@ -121,10 +140,10 @@ export function ReviewTable({ runs, onOpen }: { runs: RunSummary[]; onOpen: (run
 export function TransactionsTable({ transactions, runIdFor, onOpen }: { transactions: TransactionDto[]; runIdFor: Map<string, string>; onOpen: (runId: string) => void }) {
   return (
     <DataTable
-      head={['MoMo Tx ID', 'Network', 'Sender', 'Paid', 'Order', 'Received']}
+      head={['Transaction ID', 'Network', 'Paid by', 'Amount', 'Order', 'Received']}
       empty={transactions.length === 0}
-      emptyTitle="No transactions yet"
-      emptyText="Ingest a MoMo SMS to record the first payment."
+      emptyTitle="No payments yet"
+      emptyText="Click “Check a payment” and paste a MoMo SMS to record the first one."
     >
       {transactions.map((t) => {
         const runId = runIdFor.get(t.momoTxId)
@@ -173,7 +192,7 @@ export function TransactionsTable({ transactions, runIdFor, onOpen }: { transact
 
 export function OrdersTable({ orders }: { orders: OrderDto[] }) {
   return (
-    <DataTable head={['Customer', 'Phone', 'Expected', 'Status', 'Created', 'Updated']} empty={orders.length === 0} emptyTitle="No orders yet" emptyText="Create an order so incoming payments have something to match.">
+    <DataTable head={['Customer', 'Phone', 'Amount owed', 'Status', 'Created', 'Last change']} empty={orders.length === 0} emptyTitle="No orders yet" emptyText="Add an order so the assistant knows what each customer owes.">
       {orders.map((o) => (
         <tr key={o.id}>
           <td className={td}>
@@ -197,7 +216,7 @@ export function OrdersTable({ orders }: { orders: OrderDto[] }) {
 
 export function RunsTable({ runs, onOpen }: { runs: RunSummary[]; onOpen: (runId: string) => void }) {
   return (
-    <DataTable head={['Run', 'Sender', 'Amount', 'Status', 'Outcome', 'Steps', 'Started', '']} empty={runs.length === 0} emptyTitle="No agent runs yet" emptyText="Each ingested SMS starts a run you can trace step by step.">
+    <DataTable head={['Ref', 'Paid by', 'Amount', 'Status', 'Result', 'Steps', 'Time', '']} empty={runs.length === 0} emptyTitle="No payments checked yet" emptyText="Each payment you check shows up here with every step the assistant took.">
       {runs.map((r) => {
         const p = runParsed(r)
         return (
@@ -226,12 +245,12 @@ export function RunsTable({ runs, onOpen }: { runs: RunSummary[]; onOpen: (runId
 
 export function AuditTable({ audit, onOpen, knownRuns }: { audit: AuditLogDto[]; onOpen: (runId: string) => void; knownRuns: Set<string> }) {
   return (
-    <DataTable head={['Time', 'Event', 'Detail', 'Run']} empty={audit.length === 0} emptyTitle="Audit log is empty" minWidth="48rem">
+    <DataTable head={['Time', 'What happened', 'Details', 'Ref']} empty={audit.length === 0} emptyTitle="Nothing has happened yet" minWidth="48rem">
       {audit.map((a) => (
         <tr key={a.id} {...rowProps(knownRuns.has(a.runId) ? () => onOpen(a.runId) : undefined)}>
           <td className={cx(td, 'text-slate-500 tabular-nums')}>{dateTime(a.createdAt)}</td>
           <td className={td}>
-            <code className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-700">{a.event}</code>
+            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-700">{auditLabel(a.event)}</span>
           </td>
           <td className={cx(td, 'max-w-lg truncate')} title={a.message}>
             {a.message}

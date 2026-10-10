@@ -31,12 +31,12 @@ function ReconStrip({ transactions, awaiting, onReview }: { transactions: Transa
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
         <div className="grid flex-1 grid-cols-3 items-center gap-3 sm:flex sm:gap-5">
-          <Figure label="MoMo received" value={ghs(s.received)} sub={`${s.receivedCount} transaction${s.receivedCount === 1 ? '' : 's'}`} />
+          <Figure label="MoMo received" value={ghs(s.received)} sub={`${s.receivedCount} payment${s.receivedCount === 1 ? '' : 's'}`} />
           <Operator icon={Minus} />
-          <Figure label="Verified against orders" value={ghs(s.verified)} sub={`${s.verifiedCount} verified`} />
+          <Figure label="Matched to orders" value={ghs(s.verified)} sub={`${s.verifiedCount} matched`} />
           <Operator icon={Equal} />
           <div className="min-w-0">
-            <p className="text-xs text-slate-500">Unreconciled</p>
+            <p className="text-xs text-slate-500">Not yet matched</p>
             <p className={cx('mt-0.5 flex items-center gap-1.5 truncate text-base font-semibold tracking-tight tabular-nums sm:text-2xl', balanced ? 'text-emerald-600' : 'text-amber-600')}>
               {ghs(s.unreconciled)}
               {balanced && s.receivedCount > 0 && <CheckCircle2 className="size-5 shrink-0" />}
@@ -53,7 +53,7 @@ function ReconStrip({ transactions, awaiting, onReview }: { transactions: Transa
             awaiting ? 'bg-amber-400 text-slate-900 hover:bg-amber-300' : 'cursor-default bg-slate-100 text-slate-400',
           )}
         >
-          {awaiting ? `Review ${awaiting} payment${awaiting === 1 ? '' : 's'}` : 'Nothing to review'}
+          {awaiting ? `Decide on ${awaiting} payment${awaiting === 1 ? '' : 's'}` : 'Nothing needs you'}
           {awaiting > 0 && <ArrowRight className="size-4" />}
         </button>
       </div>
@@ -69,10 +69,10 @@ const STAT_BAR: Record<OrderStatus, string> = {
 }
 
 const STAT_HINT: Record<OrderStatus, string> = {
-  PENDING: 'Awaiting payment',
-  VERIFIED: 'Paid in full or accepted',
-  DISCREPANCY_FLAGGED: 'Over / under paid',
-  REJECTED: 'Payment rejected',
+  PENDING: 'Orders not paid yet',
+  VERIFIED: 'Fully paid, or amount accepted',
+  DISCREPANCY_FLAGGED: 'Customer paid too little or too much',
+  REJECTED: 'Payment was declined',
 }
 
 function OrderStats({ orders }: { orders: LedgerData['orders'] }) {
@@ -83,7 +83,7 @@ function OrderStats({ orders }: { orders: LedgerData['orders'] }) {
         <div key={s} className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className={cx('h-1', STAT_BAR[s])} />
           <div className="px-4 py-3">
-            <p className="text-xs font-medium text-slate-500">{ORDER_STATUS[s].label} orders</p>
+            <p className="text-xs font-medium text-slate-500">{ORDER_STATUS[s].label}</p>
             <p className="mt-1 text-2xl font-semibold text-slate-900 tabular-nums">{counts[s] ?? 0}</p>
             <p className="mt-0.5 text-[11px] text-slate-400">{STAT_HINT[s]}</p>
           </div>
@@ -106,7 +106,7 @@ export function Overview({ runs, data, onOpen, onNavigate }: { runs: RunSummary[
       <OrderStats orders={data.orders} />
       <div className="grid gap-5 xl:grid-cols-12">
         <div className="min-w-0 xl:col-span-8">
-          <Panel title="Needs your decision" subtitle="The agent paused these payments" icon={<span className="size-2 animate-pulse rounded-full bg-amber-500" />} actions={viewAll('review')}>
+          <Panel title="Needs your decision" subtitle="The assistant needs you to decide on these" icon={<span className="size-2 animate-pulse rounded-full bg-amber-500" />} actions={viewAll('review')}>
             <ReviewTable runs={awaiting.slice(0, 5)} onOpen={onOpen} />
           </Panel>
         </div>
@@ -114,7 +114,7 @@ export function Overview({ runs, data, onOpen, onNavigate }: { runs: RunSummary[
           <AgentActivity runs={runs} onOpen={onOpen} onViewAll={() => onNavigate('runs')} />
         </div>
       </div>
-      <Panel title="Recent transactions" icon={<span className="size-2 rounded-full bg-emerald-500" />} actions={viewAll('transactions')}>
+      <Panel title="Latest payments" icon={<span className="size-2 rounded-full bg-emerald-500" />} actions={viewAll('transactions')}>
         <TransactionsTable transactions={data.transactions.slice(0, 5)} runIdFor={runsByTxId(runs)} onOpen={onOpen} />
       </Panel>
     </div>

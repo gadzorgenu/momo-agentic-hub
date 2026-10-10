@@ -4,7 +4,7 @@ import { cx, ghs, time } from '../format'
 import { OUTCOME_DOT, runParsed } from '../selectors'
 import { Avatar, Panel } from './ui'
 
-const STAGES = ['Parse', 'Check', 'Match', 'Resolve'] as const
+const STAGES = ['Read', 'Check', 'Match', 'Finish'] as const
 
 // Graph nodes mapped onto the four stages shown in the progress bar.
 const NODE_STAGE: Record<string, number> = {
@@ -45,10 +45,10 @@ function latestMessage(run: RunSummary): string {
 }
 
 const STATUS_LABEL: Record<RunSummary['status'], { text: string; className: string }> = {
-  RUNNING: { text: 'Working', className: 'text-sky-600' },
+  RUNNING: { text: 'Checking', className: 'text-sky-600' },
   AWAITING_REVIEW: { text: 'Needs you', className: 'text-amber-600' },
   COMPLETED: { text: 'Done', className: 'text-emerald-600' },
-  FAILED: { text: 'Failed', className: 'text-rose-600' },
+  FAILED: { text: "Couldn't finish", className: 'text-rose-600' },
 }
 
 function RunRow({ run, onOpen }: { run: RunSummary; onOpen: () => void }) {
@@ -62,12 +62,12 @@ function RunRow({ run, onOpen }: { run: RunSummary; onOpen: () => void }) {
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline justify-between gap-2">
             <span className="truncate text-sm font-medium text-slate-900">
-              {parsed?.senderName ?? 'Reading SMS…'}
+              {parsed?.senderName ?? 'Reading message…'}
               {parsed && <span className="ml-1.5 font-normal text-slate-500 tabular-nums">{ghs(parsed.amount)}</span>}
             </span>
             <span className={cx('shrink-0 text-[11px] font-medium', status.className)}>{status.text}</span>
           </span>
-          <span className="mt-1.5 flex gap-1" aria-label={`Stage ${stage + 1} of ${STAGES.length}: ${STAGES[stage]}`}>
+          <span className="mt-1.5 flex gap-1" aria-label={`Step ${stage + 1} of ${STAGES.length}: ${STAGES[stage]}`}>
             {STAGES.map((s, i) => (
               <span key={s} title={s} className={cx('h-1 flex-1 rounded-full', segmentClass(run, i, stage))} />
             ))}
@@ -85,8 +85,8 @@ function RunRow({ run, onOpen }: { run: RunSummary; onOpen: () => void }) {
 // Priority order: what needs a human first, then live work, then failures, then history.
 const GROUPS: { status: RunSummary['status']; label: string; dot: string; oldestFirst: boolean }[] = [
   { status: 'AWAITING_REVIEW', label: 'Needs you', dot: 'bg-amber-500', oldestFirst: true },
-  { status: 'RUNNING', label: 'Working', dot: 'animate-pulse bg-sky-500', oldestFirst: false },
-  { status: 'FAILED', label: 'Failed', dot: 'bg-rose-500', oldestFirst: false },
+  { status: 'RUNNING', label: 'Checking now', dot: 'animate-pulse bg-sky-500', oldestFirst: false },
+  { status: 'FAILED', label: "Couldn't finish", dot: 'bg-rose-500', oldestFirst: false },
   { status: 'COMPLETED', label: 'Done', dot: 'bg-emerald-500', oldestFirst: false },
 ]
 
@@ -101,19 +101,19 @@ export function AgentActivity({ runs, onOpen, onViewAll }: { runs: RunSummary[];
 
   return (
     <Panel
-      title="Live agent activity"
-      subtitle={working ? `${working} run${working === 1 ? '' : 's'} in progress` : 'Ranked by priority'}
+      title="Assistant at work"
+      subtitle={working ? `Checking ${working} payment${working === 1 ? '' : 's'} now` : 'Most urgent first'}
       icon={<Activity className={cx('size-4 text-violet-500', working > 0 && 'animate-pulse')} />}
       actions={
         runs.length > 0 && (
           <button type="button" onClick={onViewAll} className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-900">
-            All runs <ArrowRight className="size-3.5" />
+            See all <ArrowRight className="size-3.5" />
           </button>
         )
       }
     >
       {runs.length === 0 ? (
-        <p className="px-4 py-8 text-center text-sm text-slate-500">Runs will appear here as payments arrive.</p>
+        <p className="px-4 py-8 text-center text-sm text-slate-500">Payments will appear here as they are checked.</p>
       ) : (
         <div className="max-h-[22rem] overflow-y-auto overscroll-contain">
           {groups.map((g) => (

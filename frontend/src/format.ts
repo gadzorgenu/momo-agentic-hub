@@ -21,23 +21,23 @@ export const TONE_CLASSES: Record<Tone, string> = {
 }
 
 export const ORDER_STATUS: Record<OrderStatus, { label: string; tone: Tone }> = {
-  PENDING: { label: 'Pending', tone: 'slate' },
-  VERIFIED: { label: 'Verified', tone: 'emerald' },
-  DISCREPANCY_FLAGGED: { label: 'Discrepancy', tone: 'amber' },
-  REJECTED: { label: 'Rejected', tone: 'rose' },
+  PENDING: { label: 'Waiting for payment', tone: 'slate' },
+  VERIFIED: { label: 'Paid', tone: 'emerald' },
+  DISCREPANCY_FLAGGED: { label: 'Wrong amount', tone: 'amber' },
+  REJECTED: { label: 'Declined', tone: 'rose' },
 }
 
 export const OUTCOME: Record<MatchOutcome, { label: string; tone: Tone }> = {
-  EXACT_MATCH: { label: 'Exact match', tone: 'emerald' },
-  UNDERPAYMENT: { label: 'Underpayment', tone: 'amber' },
-  OVERPAYMENT: { label: 'Overpayment', tone: 'sky' },
-  UNMATCHED: { label: 'Unmatched', tone: 'rose' },
-  DUPLICATE: { label: 'Duplicate', tone: 'violet' },
+  EXACT_MATCH: { label: 'Paid in full', tone: 'emerald' },
+  UNDERPAYMENT: { label: 'Paid too little', tone: 'amber' },
+  OVERPAYMENT: { label: 'Paid too much', tone: 'sky' },
+  UNMATCHED: { label: 'No matching order', tone: 'rose' },
+  DUPLICATE: { label: 'Already recorded', tone: 'violet' },
 }
 
 export const RUN_STATUS: Record<RunStatus, { label: string; tone: Tone }> = {
-  RUNNING: { label: 'Running', tone: 'sky' },
-  AWAITING_REVIEW: { label: 'Needs review', tone: 'amber' },
-  COMPLETED: { label: 'Completed', tone: 'emerald' },
-  FAILED: { label: 'Failed', tone: 'rose' },
+  RUNNING: { label: 'Checking', tone: 'sky' },
+  AWAITING_REVIEW: { label: 'Needs your decision', tone: 'amber' },
+  COMPLETED: { label: 'Done', tone: 'emerald' },
+  FAILED: { label: "Couldn't finish", tone: 'rose' },
 }

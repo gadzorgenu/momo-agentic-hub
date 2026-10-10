@@ -39,6 +39,16 @@ export const ReconciliationState = Annotation.Root({
 export type ReconciliationStateT = typeof ReconciliationState.State
 
 const ghs = (n: number) => `GHS ${n.toFixed(2)}`
+const NETWORK: Record<string, string> = { MTN: 'MTN MoMo', TELECEL: 'Telecel Cash', AT: 'AT Money' }
+const network = (provider: string) => NETWORK[provider] ?? 'MoMo'
+// SMS names arrive in capitals ("AMA SERWAA"); write them the way people read them.
+const nameCase = (s: string) => s.toLowerCase().replace(/\b\p{L}/gu, (c) => c.toUpperCase())
+const MATCHED_BY = { phone: 'their phone number', name: 'their name', amount: 'the amount' } as const
+// Ghana is UTC+0; show times the way a shop owner reads them.
+const when = (iso: string) =>
+  new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Accra' })
+
+// Messages below are shown to shop owners in the dashboard, so they use plain language, not system terms.
 const runIdOf = (config: LangGraphRunnableConfig) => String(config.configurable?.thread_id)
 
 export function buildReconciliationGraph({ tools, extractor, events, checkpointer = new MemorySaver() }: GraphDeps) {
@@ -50,42 +60,44 @@ export function buildReconciliationGraph({ tools, extractor, events, checkpointe
     t: { invoke(input: any): Promise<T | ToolMessage> },
     input: object,
   ): Promise<T> {
-    events.emit(runId, 'tool_call', `Calling ${name}`, { node, data: { tool: name, input } })
+    events.emit(runId, 'tool_call', `Looking up records (${name})`, { node, data: { tool: name, input } })
     const output = await t.invoke(input)
     // Called with plain args (not a ToolCall), so LangChain returns the raw result.
     if (output instanceof ToolMessage) throw new Error(`${name} returned an unexpected ToolMessage`)
-    events.emit(runId, 'tool_result', `${name} returned`, { node, data: { tool: name, output } })
+    events.emit(runId, 'tool_result', `Got the records (${name})`, { node, data: { tool: name, output } })
     return output
   }
 
   async function parseSms(state: ReconciliationStateT, config: LangGraphRunnableConfig) {
     const runId = runIdOf(config)
-    events.emit(runId, 'node_started', 'Extracting payment details from SMS', { node: 'parse_sms' })
+    events.emit(runId, 'node_started', 'Reading the payment message', { node: 'parse_sms' })
     const result = await extractor.extract(state.rawSms)
     if (!result.ok) {
-      events.emit(runId, 'thought', `Could not extract a payment: ${result.reason}`, { node: 'parse_sms' })
-      await events.audit(runId, 'PARSE_FAILED', result.reason)
-      return { error: `Unparseable SMS: ${result.reason}` }
+      const message = "We couldn't find a MoMo payment in this message. Check that it is a 'payment received' SMS and try again."
+      events.emit(runId, 'thought', message, { node: 'parse_sms', data: { reason: result.reason } })
+      await events.audit(runId, 'PARSE_FAILED', message, { data: { reason: result.reason } })
+      return { error: message }
     }
     const p = result.parsed
-    events.emit(runId, 'thought', `${result.reasoning} Found ${ghs(p.amount)} from ${p.senderName} (${p.senderPhone}), ${p.provider} tx ${p.momoTxId}.`, {
+    events.emit(runId, 'thought', `${nameCase(p.senderName)} (${p.senderPhone}) sent ${ghs(p.amount)} by ${network(p.provider)}. Transaction ID: ${p.momoTxId}.`, {
       node: 'parse_sms',
-      data: { parsed: p, method: result.method },
+      // The model's own explanation is kept for technical details only.
+      data: { parsed: p, method: result.method, reasoning: result.reasoning },
     })
-    await events.audit(runId, 'SMS_PARSED', `Parsed ${p.provider} tx ${p.momoTxId} via ${result.method}`, { data: p })
+    await events.audit(runId, 'SMS_PARSED', `Read a payment of ${ghs(p.amount)} from ${nameCase(p.senderName)} (${network(p.provider)})`, { data: { ...p, method: result.method } })
     return { parsed: p }
   }
 
   async function checkDuplicate(state: ReconciliationStateT, config: LangGraphRunnableConfig) {
     const runId = runIdOf(config)
     const parsed = state.parsed!
-    events.emit(runId, 'node_started', 'Checking for duplicate transaction', { node: 'check_duplicate' })
+    events.emit(runId, 'node_started', 'Checking this payment has not been recorded before', { node: 'check_duplicate' })
     const found = await callTool(runId, 'check_duplicate', 'find_transaction', tools.findTransaction, { momoTxId: parsed.momoTxId })
     if (!found.exists) {
-      events.emit(runId, 'thought', `Transaction ${parsed.momoTxId} has not been seen before.`, { node: 'check_duplicate' })
+      events.emit(runId, 'thought', 'This is a new payment, not a repeat of an earlier SMS.', { node: 'check_duplicate' })
       return {}
     }
-    const summary = `Duplicate: transaction ${parsed.momoTxId} was already processed at ${found.processedAt}. Ignored to prevent double-crediting.`
+    const summary = `This payment was already recorded on ${when(found.processedAt)}. We ignored it so it is not counted twice.`
     events.emit(runId, 'thought', summary, { node: 'check_duplicate' })
     await events.audit(runId, 'DUPLICATE_REJECTED', summary, { transactionId: found.transactionId, orderId: found.orderId })
     return { outcome: 'DUPLICATE' as const, summary }
@@ -94,22 +106,22 @@ export function buildReconciliationGraph({ tools, extractor, events, checkpointe
   async function matchOrder(state: ReconciliationStateT, config: LangGraphRunnableConfig) {
     const runId = runIdOf(config)
     const parsed = state.parsed!
-    events.emit(runId, 'node_started', 'Matching payment against pending orders', { node: 'match_order' })
+    events.emit(runId, 'node_started', 'Looking for the order this payment is for', { node: 'match_order' })
     const pending = await callTool(runId, 'match_order', 'list_pending_orders', tools.listPendingOrders, {})
     const match = matchPayment(parsed, pending)
 
     let reasoning: string
     if (!match.order) {
-      reasoning = `No pending order matches sender phone ${parsed.senderPhone}, name "${parsed.senderName}", or a unique amount of ${ghs(parsed.amount)} (${pending.length} pending orders checked).`
+      reasoning = `We checked ${pending.length} unpaid order${pending.length === 1 ? '' : 's'} but none match ${nameCase(parsed.senderName)}, the number ${parsed.senderPhone}, or the amount ${ghs(parsed.amount)}.`
     } else {
       const o = match.order
-      const base = `Matched order for ${o.customerName} by ${match.matchedBy}; expected ${ghs(o.expectedAmount)}, received ${ghs(parsed.amount)}.`
+      const base = `Found ${o.customerName}'s order using ${MATCHED_BY[match.matchedBy!]}. They owe ${ghs(o.expectedAmount)} and paid ${ghs(parsed.amount)}.`
       reasoning =
         match.outcome === 'EXACT_MATCH'
-          ? `${base} Amounts are equal.`
+          ? `${base} That is the full amount.`
           : match.outcome === 'UNDERPAYMENT'
-            ? `${base} Underpaid by ${ghs(-match.difference!)} (possibly cash-out fees deducted).`
-            : `${base} Overpaid by ${ghs(match.difference!)}.`
+            ? `${base} That is ${ghs(-match.difference!)} short. MoMo charges may have been taken off.`
+            : `${base} That is ${ghs(match.difference!)} more than they owe.`
     }
     events.emit(runId, 'thought', reasoning, { node: 'match_order', data: { outcome: match.outcome, matchedBy: match.matchedBy, orderId: match.order?.id ?? null } })
     return { order: match.order, outcome: match.outcome, difference: match.difference }
@@ -118,14 +130,14 @@ export function buildReconciliationGraph({ tools, extractor, events, checkpointe
   async function settlePayment(state: ReconciliationStateT, config: LangGraphRunnableConfig) {
     const runId = runIdOf(config)
     const { parsed, order } = state
-    events.emit(runId, 'node_started', 'Verifying order', { node: 'settle_payment' })
+    events.emit(runId, 'node_started', 'Marking the order as paid', { node: 'settle_payment' })
     const res = await callTool(runId, 'settle_payment', 'settle_exact_match', tools.settleExactMatch, { parsed, rawSms: state.rawSms, orderId: order!.id })
     if (res.duplicate) {
-      const summary = `Duplicate: transaction ${parsed!.momoTxId} was recorded by a concurrent run.`
+      const summary = 'This payment was recorded a moment ago from another copy of the same SMS, so we ignored this one.'
       await events.audit(runId, 'DUPLICATE_REJECTED', summary)
       return { outcome: 'DUPLICATE' as const, summary }
     }
-    const summary = `Order for ${order!.customerName} VERIFIED with ${ghs(parsed!.amount)} (tx ${parsed!.momoTxId}).`
+    const summary = `${order!.customerName}'s order is paid. ${ghs(parsed!.amount)} received.`
     await events.audit(runId, 'ORDER_VERIFIED', summary, { orderId: order!.id, transactionId: res.transactionId })
     return { transactionId: res.transactionId, summary }
   }
@@ -133,14 +145,14 @@ export function buildReconciliationGraph({ tools, extractor, events, checkpointe
   async function flagDiscrepancy(state: ReconciliationStateT, config: LangGraphRunnableConfig) {
     const runId = runIdOf(config)
     const { parsed, order, outcome, difference } = state
-    events.emit(runId, 'node_started', 'Flagging anomaly for human review', { node: 'flag_discrepancy' })
+    events.emit(runId, 'node_started', 'Asking you to decide', { node: 'flag_discrepancy' })
     const res = await callTool(runId, 'flag_discrepancy', 'flag_discrepancy', tools.flagDiscrepancy, {
       parsed,
       rawSms: state.rawSms,
       orderId: order?.id ?? null,
     })
     if (res.duplicate) {
-      const summary = `Duplicate: transaction ${parsed!.momoTxId} was recorded by a concurrent run.`
+      const summary = 'This payment was recorded a moment ago from another copy of the same SMS, so we ignored this one.'
       await events.audit(runId, 'DUPLICATE_REJECTED', summary)
       return { outcome: 'DUPLICATE' as const, summary }
     }
@@ -148,10 +160,10 @@ export function buildReconciliationGraph({ tools, extractor, events, checkpointe
     const reviewOutcome = outcome as ReviewRequest['outcome']
     const reason =
       reviewOutcome === 'UNMATCHED'
-        ? `Payment of ${ghs(parsed!.amount)} from ${parsed!.senderName} does not match any pending order.`
+        ? `${nameCase(parsed!.senderName)} paid ${ghs(parsed!.amount)}, but we couldn't find an unpaid order for them.`
         : reviewOutcome === 'UNDERPAYMENT'
-          ? `Underpayment of ${ghs(-difference!)} on order for ${order!.customerName}.`
-          : `Overpayment of ${ghs(difference!)} on order for ${order!.customerName}.`
+          ? `${order!.customerName} paid ${ghs(-difference!)} less than they owe.`
+          : `${order!.customerName} paid ${ghs(difference!)} more than they owe.`
     const review: ReviewRequest = {
       outcome: reviewOutcome,
       reason,
@@ -176,7 +188,7 @@ export function buildReconciliationGraph({ tools, extractor, events, checkpointe
   async function applyDecision(state: ReconciliationStateT, config: LangGraphRunnableConfig) {
     const runId = runIdOf(config)
     const { decision, order, transactionId, parsed, difference } = state
-    events.emit(runId, 'node_started', `Applying operator decision: ${decision}`, { node: 'apply_decision' })
+    events.emit(runId, 'node_started', 'Saving your decision', { node: 'apply_decision' })
     const res = await callTool(runId, 'apply_decision', 'apply_review_decision', tools.applyReviewDecision, {
       transactionId,
       orderId: order?.id ?? null,
@@ -184,12 +196,12 @@ export function buildReconciliationGraph({ tools, extractor, events, checkpointe
     })
     const summary =
       decision === 'ACCEPT'
-        ? `Operator accepted ${ghs(parsed!.amount)} for ${order!.customerName}'s order; order VERIFIED${difference ? ` with ${difference < 0 ? 'shortfall' : 'excess'} of ${ghs(Math.abs(difference))} noted` : ''}.`
+        ? `Accepted ${ghs(parsed!.amount)} for ${order!.customerName}'s order. The order is now marked paid${difference ? ` (${ghs(Math.abs(difference))} ${difference < 0 ? 'short' : 'extra'})` : ''}.`
         : decision === 'REQUEST_BALANCE'
-          ? `Balance of ${ghs(-difference!)} requested from ${order!.customerName}; order remains DISCREPANCY_FLAGGED.`
+          ? `Asked ${order!.customerName} to pay the remaining ${ghs(-difference!)}. The order stays open until then.`
           : order
-            ? `Operator rejected the payment for ${order.customerName}'s order; order REJECTED.`
-            : `Operator rejected unmatched payment ${parsed!.momoTxId}; recorded without an order.`
+            ? `Declined the payment for ${order.customerName}'s order. The order is marked declined.`
+            : `Declined the payment from ${nameCase(parsed!.senderName)}. It is kept on record but not linked to any order.`
     events.emit(runId, 'thought', summary, { node: 'apply_decision' })
     await events.audit(runId, `DECISION_${decision}`, summary, { orderId: order?.id ?? null, transactionId, data: { orderStatus: res.orderStatus } })
     return { summary }

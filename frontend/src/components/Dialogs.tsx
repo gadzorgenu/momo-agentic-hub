@@ -10,22 +10,22 @@ type Sample = { label: string; provider: 'MTN' | 'Telecel' | 'AT' | 'Unknown'; s
 // Samples line up with the seeded orders (backend/prisma/seed.js).
 const SAMPLES: Sample[] = [
   {
-    label: 'MTN · exact',
+    label: 'MTN · paid in full',
     provider: 'MTN',
     sms: 'Payment received for GHS 150.00 from KWAME MENSAH 233241234567. Current Balance: GHS 1,250.00. Available Balance: GHS 1,250.00. Reference: Order 1001. Transaction ID: 51234567890. TRANSACTION FEE: 0.00',
   },
   {
-    label: 'Telecel · underpaid',
+    label: 'Telecel · paid too little',
     provider: 'Telecel',
     sms: '0000012345678 Confirmed. You have received GHS95.50 from 0201234567 - AMA SERWAA on 2026-05-01 at 10:15:22. Your Telecel Cash balance is GHS300.00.',
   },
   {
-    label: 'AT · overpaid',
+    label: 'AT · paid too much',
     provider: 'AT',
     sms: 'AT Money: You have received GHS 20.00 from 0271234567 KOFI BOATENG. Trans ID: ATX7781234. Date: 01/05/2026 10:15. New balance: GHS 45.00',
   },
   {
-    label: 'Unmatched',
+    label: 'No matching order',
     provider: 'Unknown',
     sms: 'Payment received for GHS 42.00 from YAW DONKOR 233599887766. Current Balance: GHS 900.00. Transaction ID: 61234500001.',
   },
@@ -65,19 +65,19 @@ export function IngestDialog({ open, onClose, onStarted }: { open: boolean; onCl
     <Modal
       open={open}
       onClose={onClose}
-      title="Ingest MoMo SMS"
-      description="Paste a payment SMS. The agent will parse it, match it to an order and reconcile it."
+      title="Check a payment"
+      description="Paste the MoMo SMS you received. The assistant will read it and find the order it pays for."
       size="lg"
       footer={
         <>
           <span className="mr-auto hidden text-[11px] text-slate-500 sm:block">
-            <Kbd>⌘</Kbd> + <Kbd>Enter</Kbd> to submit
+            Press <Kbd>⌘</Kbd> + <Kbd>Enter</Kbd> to check
           </span>
           <Button variant="secondary" onClick={onClose}>
             Cancel
           </Button>
           <Button icon={Send} loading={submitting} disabled={!trimmed || sms.length > MAX_CHARS} onClick={() => void submit()}>
-            Reconcile payment
+            Check payment
           </Button>
         </>
       }
@@ -89,13 +89,13 @@ export function IngestDialog({ open, onClose, onStarted }: { open: boolean; onCl
           onChange={(e) => setSms(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && (e.metaKey || e.ctrlKey) && void submit()}
           rows={6}
-          placeholder="Paste an MTN MoMo, Telecel Cash or AT Money payment SMS…"
+          placeholder="Paste the MTN MoMo, Telecel Cash or AT Money SMS here…"
           aria-label="MoMo SMS"
           className="w-full resize-y rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-800 outline-none focus:border-amber-400 focus:bg-white focus:ring-2 focus:ring-amber-100"
         />
         <div>
           <p className="mb-1.5 flex items-center gap-1 text-[11px] font-medium tracking-wide text-slate-500 uppercase">
-            <Sparkles className="size-3 text-amber-500" /> Try a sample
+            <Sparkles className="size-3 text-amber-500" /> Try an example
           </p>
           <div className="flex flex-wrap gap-1.5">
             {SAMPLES.map((s) => (
@@ -142,8 +142,8 @@ export function NewOrderDialog({ open, onClose, onCreated }: { open: boolean; on
     <Modal
       open={open}
       onClose={onClose}
-      title="New pending order"
-      description="Incoming MoMo payments are matched against pending orders by phone, name and amount."
+      title="New order"
+      description="Record what a customer owes. When their MoMo payment arrives, the assistant matches it to this order."
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>
@@ -163,7 +163,7 @@ export function NewOrderDialog({ open, onClose, onCreated }: { open: boolean; on
           <Field label="MoMo number" required>
             <Input required value={form.customerPhone} onChange={(e) => setForm({ ...form, customerPhone: e.target.value })} placeholder="024 123 4567" />
           </Field>
-          <Field label="Amount (GHS)" required>
+          <Field label="Amount owed (GHS)" required>
             <Input required type="number" step="0.01" min="0.01" value={form.expectedAmount} onChange={(e) => setForm({ ...form, expectedAmount: e.target.value })} placeholder="150.00" />
           </Field>
         </div>

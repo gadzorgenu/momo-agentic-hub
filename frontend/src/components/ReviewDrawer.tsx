@@ -7,8 +7,10 @@ import { RunTimeline } from './RunTimeline'
 import { useToast } from '../toast-context'
 import { Badge, Button, IconButton } from './ui'
 
+const NETWORK_NAME: Record<string, string> = { MTN: 'MTN MoMo', TELECEL: 'Telecel Cash', AT: 'AT Money' }
+
 const DECISION_LABEL = (d: ReviewDecision, outcome: ReviewRequest['outcome']) =>
-  d === 'ACCEPT' ? (outcome === 'OVERPAYMENT' ? 'Accept Overpayment' : 'Accept Underpayment') : d === 'REQUEST_BALANCE' ? 'Request Balance' : 'Reject Transaction'
+  d === 'ACCEPT' ? (outcome === 'OVERPAYMENT' ? 'Accept the extra amount' : 'Accept the smaller amount') : d === 'REQUEST_BALANCE' ? 'Ask for the balance' : 'Decline payment'
 
 /** One "expected → received" row, in the style of a field-by-field reconciliation diff. */
 function CompareRow({ label, expected, actual, ok }: { label: string; expected: string; actual: string; ok: boolean }) {
@@ -39,7 +41,7 @@ function Comparison({ review }: { review: ReviewRequest }) {
   if (!o) {
     return (
       <div className="rounded-lg border border-rose-200 bg-rose-50/60 px-3 py-2.5 text-sm text-rose-800">
-        No pending order matches this sender, phone number or amount.
+        We couldn't find an unpaid order for this person, phone number or amount.
       </div>
     )
   }
@@ -52,7 +54,7 @@ function Comparison({ review }: { review: ReviewRequest }) {
       <CompareRow label="Amount" expected={ghs(o.expectedAmount)} actual={ghs(p.amount)} ok={review.difference === 0} />
       {review.difference !== null && review.difference !== 0 && (
         <div className="flex items-center justify-between bg-slate-50 px-3 py-2.5 text-sm">
-          <span className="text-slate-600">{review.difference < 0 ? 'Shortfall' : 'Excess'}</span>
+          <span className="text-slate-600">{review.difference < 0 ? 'Short by' : 'Extra paid'}</span>
           <span className={cx('font-semibold tabular-nums', review.difference < 0 ? 'text-amber-700' : 'text-sky-700')}>
             {review.difference < 0 ? '−' : '+'}
             {ghs(Math.abs(review.difference))}
@@ -72,9 +74,9 @@ function DecisionFooter({ run, review }: { run: RunSummary; review: ReviewReques
     setPending(decision)
     try {
       await api.decide(run.runId, { decision, note: note.trim() || undefined })
-      toast({ variant: 'success', title: 'Decision recorded', description: `${DECISION_LABEL(decision, review.outcome)} · the agent is resuming` })
+      toast({ variant: 'success', title: 'Decision recorded', description: `${DECISION_LABEL(decision, review.outcome)}. The assistant will finish up.` })
     } catch (err) {
-      toast({ variant: 'error', title: 'Could not record decision', description: err instanceof Error ? err.message : String(err) })
+      toast({ variant: 'error', title: "Couldn't save your decision", description: err instanceof Error ? err.message : String(err) })
       setPending(null)
     }
   }
@@ -83,13 +85,13 @@ function DecisionFooter({ run, review }: { run: RunSummary; review: ReviewReques
   return (
     <footer className="space-y-3 border-t border-slate-200 bg-white px-5 py-4">
       <label className="block">
-        <span className="mb-1 block text-xs font-medium text-slate-600">Note for the audit log (optional)</span>
+        <span className="mb-1 block text-xs font-medium text-slate-600">Add a note (optional)</span>
         <textarea
           value={note}
           onChange={(e) => setNote(e.target.value)}
           rows={2}
           maxLength={500}
-          placeholder="e.g. Customer confirmed MoMo cash-out fee"
+          placeholder="e.g. Customer said MoMo took a cash-out fee"
           className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
         />
       </label>
@@ -101,12 +103,12 @@ function DecisionFooter({ run, review }: { run: RunSummary; review: ReviewReques
       <div className="flex gap-2">
         {has('REQUEST_BALANCE') && (
           <Button className="flex-1" variant="warning" icon={HandCoins} loading={pending === 'REQUEST_BALANCE'} disabled={pending !== null} onClick={() => void decide('REQUEST_BALANCE')}>
-            Request Balance
+            Ask for the balance
           </Button>
         )}
         {has('REJECT') && (
           <Button className="flex-1" variant="danger" icon={X} loading={pending === 'REJECT'} disabled={pending !== null} onClick={() => void decide('REJECT')}>
-            Reject Transaction
+            Decline payment
           </Button>
         )}
       </div>
@@ -118,6 +120,7 @@ function DecisionFooter({ run, review }: { run: RunSummary; review: ReviewReques
 export function ReviewDrawer({ run, onClose }: { run: RunSummary | null; onClose: () => void }) {
   const panelRef = useRef<HTMLDivElement>(null)
   const [traceOpen, setTraceOpen] = useState(false)
+  const [technical, setTechnical] = useState(false)
 
   useEffect(() => {
     if (!run) return
@@ -150,7 +153,7 @@ export function ReviewDrawer({ run, onClose }: { run: RunSummary | null; onClose
           <div className="min-w-0">
             <h2 id="drawer-title" className="flex items-center gap-2 text-sm font-semibold text-slate-900">
               {review ? <CircleAlert className="size-4 text-amber-500" /> : null}
-              {review ? 'Review payment' : 'Run details'}
+              {review ? 'Your decision is needed' : 'Payment check'}
             </h2>
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               <Badge {...RUN_STATUS[run.status]} />
@@ -175,13 +178,13 @@ export function ReviewDrawer({ run, onClose }: { run: RunSummary | null; onClose
                   <dd className="font-mono text-slate-800">{parsed.senderPhone}</dd>
                 </div>
                 <div>
-                  <dt className="text-slate-500">MoMo Tx ID</dt>
+                  <dt className="text-slate-500">Transaction ID</dt>
                   <dd className="truncate font-mono text-slate-800">{parsed.momoTxId}</dd>
                 </div>
                 <div>
                   <dt className="text-slate-500">Network</dt>
                   <dd className="text-slate-800">
-                    {parsed.provider} · {dateTime(parsed.transactedAt ?? run.createdAt)}
+                    {NETWORK_NAME[parsed.provider] ?? 'MoMo'} · {dateTime(parsed.transactedAt ?? run.createdAt)}
                   </dd>
                 </div>
               </dl>
@@ -189,13 +192,13 @@ export function ReviewDrawer({ run, onClose }: { run: RunSummary | null; onClose
           ) : (
             <p className="flex items-center gap-2 text-sm text-slate-500">
               {running && <Loader2 className="size-4 animate-spin" />}
-              {running ? 'Reading the SMS…' : 'No payment details were extracted.'}
+              {running ? 'Reading the message…' : "We couldn't read the payment details from this message."}
             </p>
           )}
 
           {review && (
             <section className="space-y-2">
-              <h3 className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Order vs. payment</h3>
+              <h3 className="text-xs font-semibold tracking-wide text-slate-500 uppercase">What they owed vs. what they paid</h3>
               <Comparison review={review} />
             </section>
           )}
@@ -206,7 +209,7 @@ export function ReviewDrawer({ run, onClose }: { run: RunSummary | null; onClose
 
           <section className="rounded-xl border border-violet-100 bg-gradient-to-b from-violet-50/70 to-white p-4">
             <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-violet-700">
-              <Sparkles className="size-3.5" /> Agent copilot
+              <Sparkles className="size-3.5" /> {review ? 'Why the assistant needs you' : "What the assistant did"}
               {running && <Loader2 className="ml-auto size-3.5 animate-spin text-violet-400" />}
             </h3>
             {thoughts.length ? (
@@ -219,7 +222,7 @@ export function ReviewDrawer({ run, onClose }: { run: RunSummary | null; onClose
                 ))}
               </ul>
             ) : (
-              <p className="text-[13px] text-slate-500">The agent is starting…</p>
+              <p className="text-[13px] text-slate-500">The assistant is starting…</p>
             )}
           </section>
 
@@ -230,18 +233,22 @@ export function ReviewDrawer({ run, onClose }: { run: RunSummary | null; onClose
               className="flex w-full items-center justify-between text-xs font-semibold tracking-wide text-slate-500 uppercase hover:text-slate-800"
               aria-expanded={traceOpen || running}
             >
-              Execution trace · {run.events.length} events
+              All steps
               <ChevronDown className={cx('size-4 transition', (traceOpen || running) && 'rotate-180')} />
             </button>
             {(traceOpen || running) && (
               <div className="mt-3">
-                <RunTimeline events={run.events} />
+                <RunTimeline events={run.events} technical={technical} />
+                <label className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+                  <input type="checkbox" checked={technical} onChange={(e) => setTechnical(e.target.checked)} className="accent-slate-700" />
+                  Show technical details
+                </label>
               </div>
             )}
           </section>
 
           <p className="font-mono text-[11px] text-slate-400">
-            run {run.runId} · started {time(run.createdAt)}
+            Ref {run.runId.slice(0, 8)} · checked at {time(run.createdAt)}
           </p>
         </div>
 

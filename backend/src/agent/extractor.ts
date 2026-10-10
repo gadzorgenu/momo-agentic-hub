@@ -14,7 +14,7 @@ export interface SmsExtractor {
 
 // Every field is required + nullable because OpenAI strict structured output disallows optional keys.
 const LlmExtractionSchema = z.object({
-  reasoning: z.string().describe('One or two sentences on how the fields were identified.'),
+  reasoning: z.string().describe('One short sentence, in plain English for a shop owner, on what the message says.'),
   isIncomingPayment: z.boolean().describe('True only if the SMS confirms money RECEIVED by the merchant.'),
   provider: z.enum(['MTN', 'TELECEL', 'AT', 'UNKNOWN']),
   momoTxId: z.string().nullable().describe('Transaction / Financial Transaction ID exactly as written.'),

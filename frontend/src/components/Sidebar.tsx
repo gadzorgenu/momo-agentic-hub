@@ -10,7 +10,7 @@ function Logo() {
       </span>
       <div className="leading-tight">
         <p className="text-sm font-semibold text-slate-900">MoMo Hub</p>
-        <p className="text-[11px] text-slate-500">Payment verification</p>
+        <p className="text-[11px] text-slate-500">MoMo payment checker</p>
       </div>
     </div>
   )
@@ -32,7 +32,7 @@ export function Sidebar({ view, onView, reviewCount, connected }: { view: View; 
         <Logo />
       </div>
       <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-4">
-        {(['Reconcile', 'Records'] as const).map((group) => (
+        {(['Daily work', 'Records'] as const).map((group) => (
           <div key={group}>
             <p className="mb-1.5 px-2 text-[11px] font-medium uppercase tracking-wide text-slate-400">{group}</p>
             <ul className="space-y-0.5">
@@ -63,7 +63,7 @@ export function Sidebar({ view, onView, reviewCount, connected }: { view: View; 
       <div className="space-y-2 border-t border-slate-100 px-4 py-3 text-xs">
         <p className="flex items-center gap-2 text-slate-600">
           <span className={cx('size-2 rounded-full', connected ? 'animate-pulse bg-emerald-500' : 'bg-slate-300')} />
-          {connected ? 'Agent stream live' : 'Reconnecting…'}
+          {connected ? 'Live updates on' : 'Reconnecting…'}
         </p>
         <p className="text-slate-400">MTN MoMo · Telecel Cash · AT Money</p>
       </div>

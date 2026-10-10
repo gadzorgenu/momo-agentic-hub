@@ -127,7 +127,7 @@ describe('AgentService reconciliation graph', () => {
     svc.decide(runId, 'REQUEST_BALANCE')
     await waitForStatus(svc, runId, ['COMPLETED'])
     expect(order.status).toBe('DISCREPANCY_FLAGGED')
-    expect(db.auditLogs.at(-1).message).toContain('Balance of GHS 10.00 requested')
+    expect(db.auditLogs.at(-1).message).toContain('pay the remaining GHS 10.00')
   })
 
   it('rejects an overpayment and unlinks the transaction', async () => {

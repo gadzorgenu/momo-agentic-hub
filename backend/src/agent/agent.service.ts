@@ -32,6 +32,12 @@ export class InvalidDecisionError extends Error {}
 
 const MAX_RUNS_IN_MEMORY = 200
 
+const DECISION_LABEL: Record<ReviewDecision, string> = {
+  ACCEPT: 'accept the amount paid',
+  REQUEST_BALANCE: 'ask for the balance',
+  REJECT: 'decline the payment',
+}
+
 @Injectable()
 export class AgentService {
   private readonly logger = new Logger(AgentService.name)
@@ -65,7 +71,7 @@ export class AgentService {
       stream: new ReplaySubject<AgentEvent>(),
     })
     this.pruneRuns()
-    this.emit(runId, 'run_started', 'Reconciliation run started', { data: { rawSms } })
+    this.emit(runId, 'run_started', 'Started checking a new payment', { data: { rawSms } })
     void this.execute(runId, { rawSms })
     return runId
   }
@@ -81,8 +87,9 @@ export class AgentService {
     // Flip status synchronously so a double-click cannot resume the graph twice.
     run.status = 'RUNNING'
     run.review = null
-    this.emit(runId, 'review_resolved', `Operator chose ${decision}`, { data: { decision, note } })
-    void this.audit(runId, 'HUMAN_DECISION', `Operator chose ${decision}${note ? `: ${note}` : ''}`, { data: { decision, note } })
+    const label = DECISION_LABEL[decision]
+    this.emit(runId, 'review_resolved', `You chose: ${label}`, { data: { decision, note } })
+    void this.audit(runId, 'HUMAN_DECISION', `Decision: ${label}${note ? `. Note: ${note}` : ''}`, { data: { decision, note } })
     const resume: ResumeValue = { decision, note }
     void this.execute(runId, new Command<ResumeValue>({ resume }) as Parameters<ReconciliationGraph['invoke']>[0])
   }
@@ -124,14 +131,14 @@ export class AgentService {
         this.emit(runId, 'run_failed', values.error)
       } else {
         run.status = 'COMPLETED'
-        this.emit(runId, 'run_completed', values.summary ?? 'Run completed', { data: { outcome: values.outcome } })
+        this.emit(runId, 'run_completed', values.summary ?? 'Finished checking this payment', { data: { outcome: values.outcome } })
       }
       run.stream.complete()
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       this.logger.error(`[${runId}] run failed: ${message}`)
       run.status = 'FAILED'
-      this.emit(runId, 'run_failed', `Run failed: ${message}`)
+      this.emit(runId, 'run_failed', 'Something went wrong while checking this payment. Please try again.', { data: { error: message } })
       void this.audit(runId, 'RUN_FAILED', message)
       run.stream.complete()
     }

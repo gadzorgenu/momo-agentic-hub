@@ -15,12 +15,12 @@ import { useAgentHub } from './useAgentHub'
 import { useLedger } from './useLedger'
 
 const PAGE: Record<View, { title: string; subtitle: string }> = {
-  overview: { title: 'Overview', subtitle: 'MoMo payments received, verified and waiting on you' },
-  review: { title: 'Review queue', subtitle: 'Anomalies the agent paused for a human decision' },
-  runs: { title: 'Agent runs', subtitle: 'Every reconciliation run, step by step' },
-  transactions: { title: 'Transactions', subtitle: 'Every MoMo payment recorded from SMS' },
-  orders: { title: 'Orders', subtitle: 'Orders that incoming payments are matched against' },
-  audit: { title: 'Audit log', subtitle: 'Append-only record of agent actions and human decisions' },
+  overview: { title: 'Home', subtitle: 'Your MoMo payments at a glance' },
+  review: { title: 'Needs your decision', subtitle: 'Payments the assistant could not settle on its own' },
+  runs: { title: 'Payment checks', subtitle: 'Every payment the assistant has checked, step by step' },
+  transactions: { title: 'Payments', subtitle: 'Every MoMo payment received' },
+  orders: { title: 'Orders', subtitle: 'What customers owe you. Payments are matched to these.' },
+  audit: { title: 'Activity history', subtitle: 'A permanent record of everything the assistant and your team did' },
 }
 
 const matches = (q: string, ...fields: (string | number | null | undefined)[]) => !q || fields.some((f) => String(f ?? '').toLowerCase().includes(q))
@@ -51,7 +51,7 @@ export default function App() {
       break
     case 'review':
       content = (
-        <Panel title={`${awaiting.length} paused payment${awaiting.length === 1 ? '' : 's'}`} icon={<span className="size-2 animate-pulse rounded-full bg-amber-500" />}>
+        <Panel title={`${awaiting.length} payment${awaiting.length === 1 ? '' : 's'} waiting for you`} icon={<span className="size-2 animate-pulse rounded-full bg-amber-500" />}>
           <ReviewTable runs={awaiting} onOpen={setOpenRunId} />
         </Panel>
       )
@@ -62,7 +62,7 @@ export default function App() {
         return matches(q, r.runId, p?.senderName, p?.momoTxId, r.status, r.outcome)
       })
       content = (
-        <Panel title={`${rows.length} runs`} subtitle="Held in memory since the backend started" icon={null}>
+        <Panel title={`${rows.length} check${rows.length === 1 ? '' : 's'}`} subtitle="Since the app was last restarted" icon={null}>
           <RunsTable runs={rows} onOpen={setOpenRunId} />
         </Panel>
       )
@@ -71,7 +71,7 @@ export default function App() {
     case 'transactions': {
       const rows = data.transactions.filter((t) => matches(q, t.momoTxId, t.senderName, t.senderPhone, t.provider, t.order?.customerName))
       content = (
-        <Panel title={`${rows.length} transactions`} icon={null}>
+        <Panel title={`${rows.length} payment${rows.length === 1 ? '' : 's'}`} icon={null}>
           <TransactionsTable transactions={rows} runIdFor={txRunIds} onOpen={setOpenRunId} />
         </Panel>
       )
@@ -80,7 +80,7 @@ export default function App() {
     case 'orders': {
       const rows = data.orders.filter((o) => matches(q, o.customerName, o.customerPhone, o.status, o.expectedAmount))
       content = (
-        <Panel title={`${rows.length} orders`} icon={null}>
+        <Panel title={`${rows.length} order${rows.length === 1 ? '' : 's'}`} icon={null}>
           <OrdersTable orders={rows} />
         </Panel>
       )
@@ -89,7 +89,7 @@ export default function App() {
     case 'audit': {
       const rows = data.audit.filter((a) => matches(q, a.event, a.message, a.runId))
       content = (
-        <Panel title={`${rows.length} entries`} subtitle="Most recent 200" icon={null}>
+        <Panel title={`${rows.length} entr${rows.length === 1 ? 'y' : 'ies'}`} subtitle="Latest 200" icon={null}>
           <AuditTable audit={rows} onOpen={setOpenRunId} knownRuns={new Set(runs.map((r) => r.runId))} />
         </Panel>
       )
@@ -142,7 +142,7 @@ export default function App() {
                   </Button>
                 )}
                 <Button icon={Plus} onClick={() => setIngestOpen(true)}>
-                  Ingest SMS
+                  Check a payment
                 </Button>
               </div>
             </header>
